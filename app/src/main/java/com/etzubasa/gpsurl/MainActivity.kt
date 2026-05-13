@@ -34,19 +34,19 @@ class MainActivity : Activity() {
     private lateinit var prefs: SharedPreferences
     private var popupWebView: WebView? = null
 
-    private val BASE_URL      = "https://www.gpsurl.com"
-    private val DESKTOP_URL   = "$BASE_URL/misc.php?do=setmobilebrowsing&mobile=no"
-    private val LOGIN_URL     = "$BASE_URL/login.php?do=login"
-    private val PREFS_NAME    = "gpsurl_prefs"
-    private val KEY_ALIAS     = "gpsurl_key"
-    private val CLEAN_HEADERS = mapOf("X-Requested-With" to "")
+    private val BASE_URL       = "https://www.gpsurl.com"
+    private val LOGIN_URL      = "$BASE_URL/login.php?do=login"
+    private val DESKTOP_URL    = "$BASE_URL/misc.php?do=setmobilebrowsing&mobile=no"
+    private val FORUM_URL      = "$BASE_URL/forum.php"
+    private val PREFS_NAME     = "gpsurl_prefs"
+    private val KEY_ALIAS      = "gpsurl_key"
+    private val CLEAN_HEADERS  = mapOf("X-Requested-With" to "")
 
     private var pendingUser: String?  = null
     private var pendingPass: String?  = null
     private var loginAttempted        = false
-    private var desktopPageStarted    = false
-    private var readyForLogin         = false
-    private var fullSiteClicked       = false
+    private var loginDone             = false
+    private var desktopSwitchDone     = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -92,26 +92,23 @@ class MainActivity : Activity() {
         } else {
             prefs.edit().remove("username").remove("enc_pass").remove("enc_iv").apply()
         }
-        pendingUser         = user
-        pendingPass         = pass
-        loginAttempted      = false
-        desktopPageStarted  = false
-        readyForLogin       = false
-        fullSiteClicked     = false
+        pendingUser       = user
+        pendingPass       = pass
+        loginAttempted    = false
+        loginDone         = false
+        desktopSwitchDone = false
 
         loginLayout.visibility = View.GONE
         webLayout.visibility   = View.VISIBLE
-        loadUrlClean(DESKTOP_URL)
+
+        // Vai direttamente al login — Cloudflare passa con UA Android autentico
+        loadUrlClean(LOGIN_URL)
     }
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView() {
-        val defaultUA = WebSettings.getDefaultUserAgent(this)
-        val desktopUA = defaultUA
-            .replace(" Mobile ", " ")
-            .replace(" Mobile/", "/")
-            .replace("Android", "X11; Linux x86_64")
-
+        // UA Android autentico — Cloudflare non blocca
+        // NON modifichiamo l'UA: usiamo quello nativo del dispositivo
         with(webView.settings) {
             javaScriptEnabled        = true
             domStorageEnabled        = true
@@ -121,7 +118,6 @@ class MainActivity : Activity() {
             loadWithOverviewMode     = true
             mixedContentMode         = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             allowFileAccess          = true
-            userAgentString          = desktopUA
             setSupportMultipleWindows(true)
             javaScriptCanOpenWindowsAutomatically = true
         }
@@ -149,23 +145,13 @@ class MainActivity : Activity() {
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 progressBar.visibility = View.VISIBLE
-                val currentUrl = url ?: ""
-                if (currentUrl.contains("setmobilebrowsing") && !desktopPageStarted) {
-                    desktopPageStarted = true
-                }
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 progressBar.visibility = View.GONE
                 val currentUrl = url ?: ""
 
-                if (desktopPageStarted && !readyForLogin &&
-                    !currentUrl.contains("setmobilebrowsing")) {
-                    readyForLogin = true
-                    loadUrlClean(LOGIN_URL)
-                    return
-                }
-
+                // Step 1: inietta credenziali sulla pagina login
                 if (!loginAttempted && pendingUser != null &&
                     currentUrl.contains("login", ignoreCase = true)) {
                     loginAttempted = true
@@ -173,26 +159,28 @@ class MainActivity : Activity() {
                     return
                 }
 
-                if (loginAttempted && !fullSiteClicked &&
-                    !currentUrl.contains("login") &&
-                    !currentUrl.contains("setmobilebrowsing")) {
-                    fullSiteClicked = true
-                    view?.evaluateJavascript("""
-                        (function() {
-                            var links = document.querySelectorAll('a');
-                            for (var i = 0; i < links.length; i++) {
-                                var href = links[i].href || '';
-                                var text = links[i].textContent.trim();
-                                if (href.indexOf('mobile=no') >= 0 || 
-                                    text === 'Full Site' || 
-                                    href.indexOf('setmobilebrowsing') >= 0) {
-                                    links[i].click();
-                                    return 'clicked';
-                                }
-                            }
-                            return 'not_found';
-                        })();
-                    """.trimIndent(), null)
+                // Step 2: dopo login riuscito, attiva desktop mode
+                if (loginAttempted && !loginDone &&
+                    !currentUrl.contains("login", ignoreCase = true) &&
+                    !currentUrl.contains("cloudflare")) {
+                    loginDone = true
+                    // Ora siamo loggati — Cloudflare cookie è già impostato
+                    // Naviga a misc.php per impostare il cookie desktop vBulletin
+                    loadUrlClean(DESKTOP_URL)
+                    return
+                }
+
+                // Step 3: dopo misc.php vai al forum in desktop
+                if (loginDone && !desktopSwitchDone &&
+                    currentUrl.contains("setmobilebrowsing")) {
+                    desktopSwitchDone = true
+                    return
+                }
+
+                if (loginDone && desktopSwitchDone &&
+                    !currentUrl.contains("setmobilebrowsing") &&
+                    !currentUrl.contains("login")) {
+                    // Siamo nel forum desktop!
                 }
             }
         }
@@ -268,12 +256,11 @@ class MainActivity : Activity() {
     }
 
     private fun logout() {
-        pendingUser        = null
-        pendingPass        = null
-        loginAttempted     = false
-        desktopPageStarted = false
-        readyForLogin      = false
-        fullSiteClicked    = false
+        pendingUser       = null
+        pendingPass       = null
+        loginAttempted    = false
+        loginDone         = false
+        desktopSwitchDone = false
         popupWebView?.let { webLayout.removeView(it); it.destroy(); popupWebView = null }
         CookieManager.getInstance().removeAllCookies(null)
         webView.clearHistory()
