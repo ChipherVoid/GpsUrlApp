@@ -32,21 +32,19 @@ class MainActivity : Activity() {
     private lateinit var cbRemember: CheckBox
     private lateinit var btnLogin: Button
     private lateinit var prefs: SharedPreferences
-
-    // WebView popup per Cloudflare Turnstile
     private var popupWebView: WebView? = null
 
-    private val BASE_URL    = "https://www.gpsurl.com"
-    private val DESKTOP_URL = "$BASE_URL/misc.php?do=setmobilebrowsing&mobile=no"
-    private val LOGIN_URL   = "$BASE_URL/login.php?do=login"
-    private val PREFS_NAME  = "gpsurl_prefs"
-    private val KEY_ALIAS   = "gpsurl_key"
+    private val BASE_URL      = "https://www.gpsurl.com"
+    private val LOGIN_URL     = "$BASE_URL/login.php?do=login"
+    private val FORUM_URL     = "$BASE_URL/forum.php"
+    private val PREFS_NAME    = "gpsurl_prefs"
+    private val KEY_ALIAS     = "gpsurl_key"
     private val CLEAN_HEADERS = mapOf("X-Requested-With" to "")
 
     private var pendingUser: String? = null
     private var pendingPass: String? = null
     private var loginAttempted = false
-    private var desktopModeSet = false
+    private var desktopCookieSet = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -61,7 +59,6 @@ class MainActivity : Activity() {
         cbRemember  = findViewById(R.id.cbRemember)
         btnLogin    = findViewById(R.id.btnLogin)
         webView     = findViewById(R.id.webView)
-
         findViewById<View?>(R.id.tvCloudflare)?.visibility = View.GONE
 
         val savedUser = prefs.getString("username", "")
@@ -93,13 +90,20 @@ class MainActivity : Activity() {
         } else {
             prefs.edit().remove("username").remove("enc_pass").remove("enc_iv").apply()
         }
-        pendingUser    = user
-        pendingPass    = pass
-        loginAttempted = false
-        desktopModeSet = false
+        pendingUser      = user
+        pendingPass      = pass
+        loginAttempted   = false
+        desktopCookieSet = false
         loginLayout.visibility = View.GONE
         webLayout.visibility   = View.VISIBLE
-        loadUrlClean(DESKTOP_URL)
+
+        // Imposta il cookie desktop di vBulletin via JavaScript
+        // dopo che il WebView è pronto
+        webView.evaluateJavascript("""
+            document.cookie = 'vbulletin_mobile_override=no; path=/; domain=.gpsurl.com';
+        """.trimIndent(), null)
+
+        loadUrlClean(LOGIN_URL)
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -117,7 +121,6 @@ class MainActivity : Activity() {
             mixedContentMode         = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             allowFileAccess          = true
             userAgentString          = desktopUA
-            // CHIAVE: abilita popup — necessario per Cloudflare Turnstile
             setSupportMultipleWindows(true)
             javaScriptCanOpenWindowsAutomatically = true
         }
@@ -127,6 +130,8 @@ class MainActivity : Activity() {
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(webView, true)
+            // Imposta cookie desktop direttamente
+            setCookie("https://www.gpsurl.com", "vbulletin_mobile_override=no; path=/")
         }
 
         webView.webViewClient = object : WebViewClient() {
@@ -146,11 +151,13 @@ class MainActivity : Activity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 progressBar.visibility = View.GONE
                 val currentUrl = url ?: ""
-                if (!desktopModeSet && currentUrl.contains("setmobilebrowsing")) {
-                    desktopModeSet = true
-                    loadUrlClean(LOGIN_URL)
-                    return
-                }
+
+                // Reinforza il cookie desktop ad ogni pagina
+                CookieManager.getInstance().setCookie(
+                    "https://www.gpsurl.com",
+                    "vbulletin_mobile_override=no; path=/"
+                )
+
                 if (!loginAttempted && pendingUser != null &&
                     currentUrl.contains("login", ignoreCase = true)) {
                     loginAttempted = true
@@ -164,7 +171,6 @@ class MainActivity : Activity() {
                 progressBar.progress = newProgress
             }
 
-            // Gestisce il popup di Cloudflare Turnstile
             @SuppressLint("SetJavaScriptEnabled")
             override fun onCreateWindow(
                 view: WebView?, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message?
@@ -177,7 +183,6 @@ class MainActivity : Activity() {
                     mixedContentMode  = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 }
                 CookieManager.getInstance().setAcceptThirdPartyCookies(popup, true)
-
                 popup.webViewClient = object : WebViewClient() {
                     override fun onReceivedSslError(v: WebView?, h: SslErrorHandler?, e: SslError?) {
                         h?.proceed()
@@ -185,14 +190,11 @@ class MainActivity : Activity() {
                 }
                 popup.webChromeClient = object : WebChromeClient() {
                     override fun onCloseWindow(w: WebView?) {
-                        // Chiude il popup quando Cloudflare ha finito
                         webLayout.removeView(popupWebView)
                         popupWebView?.destroy()
                         popupWebView = null
                     }
                 }
-
-                // Mostra il popup sopra il WebView principale
                 val params = FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT,
                     FrameLayout.LayoutParams.MATCH_PARENT
@@ -200,7 +202,6 @@ class MainActivity : Activity() {
                 popup.layoutParams = params
                 webLayout.addView(popup)
                 popupWebView = popup
-
                 val transport = resultMsg?.obj as? WebView.WebViewTransport
                 transport?.webView = popup
                 resultMsg?.sendToTarget()
@@ -236,10 +237,10 @@ class MainActivity : Activity() {
     }
 
     private fun logout() {
-        pendingUser    = null
-        pendingPass    = null
-        loginAttempted = false
-        desktopModeSet = false
+        pendingUser      = null
+        pendingPass      = null
+        loginAttempted   = false
+        desktopCookieSet = false
         popupWebView?.let { webLayout.removeView(it); it.destroy(); popupWebView = null }
         CookieManager.getInstance().removeAllCookies(null)
         webView.clearHistory()
