@@ -35,16 +35,17 @@ class MainActivity : Activity() {
     private var popupWebView: WebView? = null
 
     private val BASE_URL      = "https://www.gpsurl.com"
+    private val DESKTOP_URL   = "$BASE_URL/misc.php?do=setmobilebrowsing&mobile=no"
     private val LOGIN_URL     = "$BASE_URL/login.php?do=login"
-    private val FORUM_URL     = "$BASE_URL/forum.php"
     private val PREFS_NAME    = "gpsurl_prefs"
     private val KEY_ALIAS     = "gpsurl_key"
     private val CLEAN_HEADERS = mapOf("X-Requested-With" to "")
 
-    private var pendingUser: String? = null
-    private var pendingPass: String? = null
-    private var loginAttempted = false
-    private var desktopCookieSet = false
+    private var pendingUser: String?  = null
+    private var pendingPass: String?  = null
+    private var loginAttempted        = false
+    private var desktopPageStarted    = false
+    private var readyForLogin         = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -90,20 +91,15 @@ class MainActivity : Activity() {
         } else {
             prefs.edit().remove("username").remove("enc_pass").remove("enc_iv").apply()
         }
-        pendingUser      = user
-        pendingPass      = pass
-        loginAttempted   = false
-        desktopCookieSet = false
+        pendingUser         = user
+        pendingPass         = pass
+        loginAttempted      = false
+        desktopPageStarted  = false
+        readyForLogin       = false
+
         loginLayout.visibility = View.GONE
         webLayout.visibility   = View.VISIBLE
-
-        // Imposta il cookie desktop di vBulletin via JavaScript
-        // dopo che il WebView è pronto
-        webView.evaluateJavascript("""
-            document.cookie = 'vbulletin_mobile_override=no; path=/; domain=.gpsurl.com';
-        """.trimIndent(), null)
-
-        loadUrlClean(LOGIN_URL)
+        loadUrlClean(DESKTOP_URL)
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -130,11 +126,10 @@ class MainActivity : Activity() {
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(webView, true)
-            // Imposta cookie desktop direttamente
-            setCookie("https://www.gpsurl.com", "vbulletin_mobile_override=no; path=/")
         }
 
         webView.webViewClient = object : WebViewClient() {
+
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val url = request?.url?.toString() ?: return false
                 if (url.contains("challenges.cloudflare.com") ||
@@ -142,21 +137,29 @@ class MainActivity : Activity() {
                 view?.loadUrl(url, CLEAN_HEADERS)
                 return true
             }
+
             override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
                 handler?.proceed()
             }
+
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 progressBar.visibility = View.VISIBLE
+                val currentUrl = url ?: ""
+                if (currentUrl.contains("setmobilebrowsing") && !desktopPageStarted) {
+                    desktopPageStarted = true
+                }
             }
+
             override fun onPageFinished(view: WebView?, url: String?) {
                 progressBar.visibility = View.GONE
                 val currentUrl = url ?: ""
 
-                // Reinforza il cookie desktop ad ogni pagina
-                CookieManager.getInstance().setCookie(
-                    "https://www.gpsurl.com",
-                    "vbulletin_mobile_override=no; path=/"
-                )
+                if (desktopPageStarted && !readyForLogin &&
+                    !currentUrl.contains("setmobilebrowsing")) {
+                    readyForLogin = true
+                    loadUrlClean(LOGIN_URL)
+                    return
+                }
 
                 if (!loginAttempted && pendingUser != null &&
                     currentUrl.contains("login", ignoreCase = true)) {
@@ -237,10 +240,11 @@ class MainActivity : Activity() {
     }
 
     private fun logout() {
-        pendingUser      = null
-        pendingPass      = null
-        loginAttempted   = false
-        desktopCookieSet = false
+        pendingUser        = null
+        pendingPass        = null
+        loginAttempted     = false
+        desktopPageStarted = false
+        readyForLogin      = false
         popupWebView?.let { webLayout.removeView(it); it.destroy(); popupWebView = null }
         CookieManager.getInstance().removeAllCookies(null)
         webView.clearHistory()
