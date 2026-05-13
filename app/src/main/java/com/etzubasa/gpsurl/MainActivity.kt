@@ -46,6 +46,7 @@ class MainActivity : Activity() {
     private var loginAttempted        = false
     private var desktopPageStarted    = false
     private var readyForLogin         = false
+    private var fullSiteClicked       = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,6 +97,7 @@ class MainActivity : Activity() {
         loginAttempted      = false
         desktopPageStarted  = false
         readyForLogin       = false
+        fullSiteClicked     = false
 
         loginLayout.visibility = View.GONE
         webLayout.visibility   = View.VISIBLE
@@ -154,6 +156,7 @@ class MainActivity : Activity() {
                 progressBar.visibility = View.GONE
                 val currentUrl = url ?: ""
 
+                // Step 1: dopo misc.php vai al login
                 if (desktopPageStarted && !readyForLogin &&
                     !currentUrl.contains("setmobilebrowsing")) {
                     readyForLogin = true
@@ -161,10 +164,35 @@ class MainActivity : Activity() {
                     return
                 }
 
+                // Step 2: inietta credenziali
                 if (!loginAttempted && pendingUser != null &&
                     currentUrl.contains("login", ignoreCase = true)) {
                     loginAttempted = true
                     injectLogin(pendingUser!!, pendingPass!!)
+                    return
+                }
+
+                // Step 3: dopo login, clicca "Full Site" se siamo ancora in mobile
+                if (loginAttempted && !fullSiteClicked &&
+                    !currentUrl.contains("login") &&
+                    !currentUrl.contains("setmobilebrowsing")) {
+                    fullSiteClicked = true
+                    view?.evaluateJavascript("""
+                        (function() {
+                            var links = document.querySelectorAll('a');
+                            for (var i = 0; i < links.length; i++) {
+                                var href = links[i].href || '';
+                                var text = links[i].textContent.trim();
+                                if (href.indexOf('mobile=no') >= 0 || 
+                                    text === 'Full Site' || 
+                                    href.indexOf('setmobilebrowsing') >= 0) {
+                                    links[i].click();
+                                    return 'clicked';
+                                }
+                            }
+                            return 'not_found';
+                        })();
+                    """.trimIndent(), null)
                 }
             }
         }
@@ -245,6 +273,7 @@ class MainActivity : Activity() {
         loginAttempted     = false
         desktopPageStarted = false
         readyForLogin      = false
+        fullSiteClicked    = false
         popupWebView?.let { webLayout.removeView(it); it.destroy(); popupWebView = null }
         CookieManager.getInstance().removeAllCookies(null)
         webView.clearHistory()
