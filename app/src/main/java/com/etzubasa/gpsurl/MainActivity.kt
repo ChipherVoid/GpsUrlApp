@@ -107,7 +107,10 @@ class MainActivity : Activity() {
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView() {
         val defaultUA = WebSettings.getDefaultUserAgent(this)
-        val desktopUA = defaultUA.replace(" Mobile ", " ").replace(" Mobile/", "/")
+        val desktopUA = defaultUA
+            .replace(" Mobile ", " ")
+            .replace(" Mobile/", "/")
+            .replace("Android", "X11; Linux x86_64")
 
         with(webView.settings) {
             javaScriptEnabled        = true
@@ -156,7 +159,6 @@ class MainActivity : Activity() {
                 progressBar.visibility = View.GONE
                 val currentUrl = url ?: ""
 
-                // Step 1: dopo misc.php vai al login
                 if (desktopPageStarted && !readyForLogin &&
                     !currentUrl.contains("setmobilebrowsing")) {
                     readyForLogin = true
@@ -164,7 +166,6 @@ class MainActivity : Activity() {
                     return
                 }
 
-                // Step 2: inietta credenziali
                 if (!loginAttempted && pendingUser != null &&
                     currentUrl.contains("login", ignoreCase = true)) {
                     loginAttempted = true
@@ -172,7 +173,6 @@ class MainActivity : Activity() {
                     return
                 }
 
-                // Step 3: dopo login, clicca "Full Site" se siamo ancora in mobile
                 if (loginAttempted && !fullSiteClicked &&
                     !currentUrl.contains("login") &&
                     !currentUrl.contains("setmobilebrowsing")) {
