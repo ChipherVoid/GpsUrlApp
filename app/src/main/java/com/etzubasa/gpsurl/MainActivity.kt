@@ -34,19 +34,19 @@ class MainActivity : Activity() {
     private lateinit var prefs: SharedPreferences
     private var popupWebView: WebView? = null
 
-    private val BASE_URL       = "https://www.gpsurl.com"
-    private val LOGIN_URL      = "$BASE_URL/login.php?do=login"
-    private val DESKTOP_URL    = "$BASE_URL/misc.php?do=setmobilebrowsing&mobile=no"
-    private val FORUM_URL      = "$BASE_URL/forum.php"
-    private val PREFS_NAME     = "gpsurl_prefs"
-    private val KEY_ALIAS      = "gpsurl_key"
-    private val CLEAN_HEADERS  = mapOf("X-Requested-With" to "")
+    private val BASE_URL      = "https://www.gpsurl.com"
+    private val LOGIN_URL     = "$BASE_URL/login.php?do=login"
+    private val DESKTOP_URL   = "$BASE_URL/misc.php?do=setmobilebrowsing&mobile=no"
+    private val PREFS_NAME    = "gpsurl_prefs"
+    private val KEY_ALIAS     = "gpsurl_key"
+    private val CLEAN_HEADERS = mapOf("X-Requested-With" to "")
 
-    private var pendingUser: String?  = null
-    private var pendingPass: String?  = null
-    private var loginAttempted        = false
-    private var loginDone             = false
-    private var desktopSwitchDone     = false
+    private var pendingUser: String? = null
+    private var pendingPass: String? = null
+    private var loginAttempted       = false
+    private var loginDone            = false
+    private var desktopUrlStarted    = false
+    private var desktopSwitchDone    = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -92,23 +92,20 @@ class MainActivity : Activity() {
         } else {
             prefs.edit().remove("username").remove("enc_pass").remove("enc_iv").apply()
         }
-        pendingUser       = user
-        pendingPass       = pass
-        loginAttempted    = false
-        loginDone         = false
-        desktopSwitchDone = false
+        pendingUser        = user
+        pendingPass        = pass
+        loginAttempted     = false
+        loginDone          = false
+        desktopUrlStarted  = false
+        desktopSwitchDone  = false
 
         loginLayout.visibility = View.GONE
         webLayout.visibility   = View.VISIBLE
-
-        // Vai direttamente al login — Cloudflare passa con UA Android autentico
         loadUrlClean(LOGIN_URL)
     }
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView() {
-        // UA Android autentico — Cloudflare non blocca
-        // NON modifichiamo l'UA: usiamo quello nativo del dispositivo
         with(webView.settings) {
             javaScriptEnabled        = true
             domStorageEnabled        = true
@@ -145,13 +142,18 @@ class MainActivity : Activity() {
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 progressBar.visibility = View.VISIBLE
+                val currentUrl = url ?: ""
+                // Rileva misc.php prima del redirect
+                if (loginDone && currentUrl.contains("setmobilebrowsing") && !desktopUrlStarted) {
+                    desktopUrlStarted = true
+                }
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 progressBar.visibility = View.GONE
                 val currentUrl = url ?: ""
 
-                // Step 1: inietta credenziali sulla pagina login
+                // Step 1: inietta credenziali
                 if (!loginAttempted && pendingUser != null &&
                     currentUrl.contains("login", ignoreCase = true)) {
                     loginAttempted = true
@@ -159,28 +161,20 @@ class MainActivity : Activity() {
                     return
                 }
 
-                // Step 2: dopo login riuscito, attiva desktop mode
+                // Step 2: dopo login vai a misc.php per desktop mode
                 if (loginAttempted && !loginDone &&
                     !currentUrl.contains("login", ignoreCase = true) &&
                     !currentUrl.contains("cloudflare")) {
                     loginDone = true
-                    // Ora siamo loggati — Cloudflare cookie è già impostato
-                    // Naviga a misc.php per impostare il cookie desktop vBulletin
                     loadUrlClean(DESKTOP_URL)
                     return
                 }
 
-                // Step 3: dopo misc.php vai al forum in desktop
-                if (loginDone && !desktopSwitchDone &&
-                    currentUrl.contains("setmobilebrowsing")) {
+                // Step 3: dopo il redirect di misc.php siamo in desktop!
+                if (loginDone && desktopUrlStarted && !desktopSwitchDone &&
+                    !currentUrl.contains("setmobilebrowsing")) {
                     desktopSwitchDone = true
-                    return
-                }
-
-                if (loginDone && desktopSwitchDone &&
-                    !currentUrl.contains("setmobilebrowsing") &&
-                    !currentUrl.contains("login")) {
-                    // Siamo nel forum desktop!
+                    // Forum caricato in desktop mode — niente da fare!
                 }
             }
         }
@@ -203,9 +197,7 @@ class MainActivity : Activity() {
                 }
                 CookieManager.getInstance().setAcceptThirdPartyCookies(popup, true)
                 popup.webViewClient = object : WebViewClient() {
-                    override fun onReceivedSslError(v: WebView?, h: SslErrorHandler?, e: SslError?) {
-                        h?.proceed()
-                    }
+                    override fun onReceivedSslError(v: WebView?, h: SslErrorHandler?, e: SslError?) { h?.proceed() }
                 }
                 popup.webChromeClient = object : WebChromeClient() {
                     override fun onCloseWindow(w: WebView?) {
@@ -260,6 +252,7 @@ class MainActivity : Activity() {
         pendingPass       = null
         loginAttempted    = false
         loginDone         = false
+        desktopUrlStarted = false
         desktopSwitchDone = false
         popupWebView?.let { webLayout.removeView(it); it.destroy(); popupWebView = null }
         CookieManager.getInstance().removeAllCookies(null)
