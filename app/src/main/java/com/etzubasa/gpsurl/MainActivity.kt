@@ -92,12 +92,12 @@ class MainActivity : Activity() {
         } else {
             prefs.edit().remove("username").remove("enc_pass").remove("enc_iv").apply()
         }
-        pendingUser        = user
-        pendingPass        = pass
-        loginAttempted     = false
-        loginDone          = false
-        desktopUrlStarted  = false
-        desktopSwitchDone  = false
+        pendingUser       = user
+        pendingPass       = pass
+        loginAttempted    = false
+        loginDone         = false
+        desktopUrlStarted = false
+        desktopSwitchDone = false
 
         loginLayout.visibility = View.GONE
         webLayout.visibility   = View.VISIBLE
@@ -106,6 +106,14 @@ class MainActivity : Activity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView() {
+        // Costruisce UA identico a Chrome Android in modalità desktop
+        // Estrae la versione Chrome reale del dispositivo
+        val defaultUA = WebSettings.getDefaultUserAgent(this)
+        val chromeVersion = Regex("Chrome/([\\d.]+)")
+            .find(defaultUA)?.groupValues?.get(1) ?: "124.0.0.0"
+        val desktopUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/$chromeVersion Safari/537.36"
+
         with(webView.settings) {
             javaScriptEnabled        = true
             domStorageEnabled        = true
@@ -115,6 +123,7 @@ class MainActivity : Activity() {
             loadWithOverviewMode     = true
             mixedContentMode         = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             allowFileAccess          = true
+            userAgentString          = desktopUA
             setSupportMultipleWindows(true)
             javaScriptCanOpenWindowsAutomatically = true
         }
@@ -143,7 +152,6 @@ class MainActivity : Activity() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 progressBar.visibility = View.VISIBLE
                 val currentUrl = url ?: ""
-                // Rileva misc.php prima del redirect
                 if (loginDone && currentUrl.contains("setmobilebrowsing") && !desktopUrlStarted) {
                     desktopUrlStarted = true
                 }
@@ -161,7 +169,7 @@ class MainActivity : Activity() {
                     return
                 }
 
-                // Step 2: dopo login vai a misc.php per desktop mode
+                // Step 2: dopo login vai a misc.php
                 if (loginAttempted && !loginDone &&
                     !currentUrl.contains("login", ignoreCase = true) &&
                     !currentUrl.contains("cloudflare")) {
@@ -170,11 +178,10 @@ class MainActivity : Activity() {
                     return
                 }
 
-                // Step 3: dopo il redirect di misc.php siamo in desktop!
+                // Step 3: dopo redirect di misc.php — siamo in desktop!
                 if (loginDone && desktopUrlStarted && !desktopSwitchDone &&
                     !currentUrl.contains("setmobilebrowsing")) {
                     desktopSwitchDone = true
-                    // Forum caricato in desktop mode — niente da fare!
                 }
             }
         }
@@ -197,7 +204,9 @@ class MainActivity : Activity() {
                 }
                 CookieManager.getInstance().setAcceptThirdPartyCookies(popup, true)
                 popup.webViewClient = object : WebViewClient() {
-                    override fun onReceivedSslError(v: WebView?, h: SslErrorHandler?, e: SslError?) { h?.proceed() }
+                    override fun onReceivedSslError(v: WebView?, h: SslErrorHandler?, e: SslError?) {
+                        h?.proceed()
+                    }
                 }
                 popup.webChromeClient = object : WebChromeClient() {
                     override fun onCloseWindow(w: WebView?) {
